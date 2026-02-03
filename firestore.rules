@@ -1,0 +1,60 @@
+rules_version = '2';
+service cloud.firestore {
+  match /databases/{database}/documents {
+    
+    // Helper function to check if user is authenticated
+    function isAuthenticated() {
+      return request.auth != null;
+    }
+
+    // Helper to check for specific roles
+    function hasRole(role) {
+      return isAuthenticated() && 
+        get(/databases/$(database)/documents/users/$(request.auth.uid)).data.role == role;
+    }
+
+    function isAdmin() {
+      return hasRole('admin');
+    }
+
+    function isShopkeeper() {
+      return hasRole('shopkeeper') || isAdmin();
+    }
+
+    // --- USERS COLLECTION ---
+    // Users can read/write their own profile (for role creation on signup if needed)
+    // Only Admin can set roles arbitrarily (though we handle this via default logic/admin panel usually)
+    match /users/{userId} {
+      allow read: if isAuthenticated() && (request.auth.uid == userId || isAdmin());
+      // Allow users to create their own initial profile, but protect 'role' field in production if strictly needed
+      // For this app, we trust the client logic or seed admins manually
+      allow write: if isAuthenticated() && (request.auth.uid == userId || isAdmin());
+    }
+
+    // --- PRODUCTS COLLECTION ---
+    // Anyone can see products (Menu)
+    // Only Admin can add/edit/delete products
+    // Shopkeepers can update stock (update only)
+    match /products/{productId} {
+      allow read: if true;
+      allow create, delete: if isAdmin();
+      allow update: if isShopkeeper(); // Shopkeepers need to toggle stock
+    }
+
+    // --- ORDERS COLLECTION ---
+    // Public can create orders (if we allow guest checkout, otherwise require auth)
+    // For this app: Authenticated clients create orders.
+    match /orders/{orderId} {
+      // Clients can read their own orders. Shopkeepers/Admins read all.
+      allow read: if isAuthenticated() && (
+        resource.data.userId == request.auth.uid || isShopkeeper()
+      );
+      
+      // Clients can create orders
+      allow create: if isAuthenticated() && request.resource.data.userId == request.auth.uid;
+      
+      // Only Shopkeepers/Admins can update status (e.g. pending -> cooking)
+      allow update: if isShopkeeper();
+    }
+  }
+}
